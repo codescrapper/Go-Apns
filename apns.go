@@ -40,7 +40,7 @@ var old_index_map map[uint32]int
 var curr_idx int
 
 // New Apn with cert_filename and key_filename.
-func New(cert_filename, key_filename, server string, timeout time.Duration, buffer int) (*Apn, error) {
+func New(cert_filename string, key_filename string, server string, timeout time.Duration, buffer int) (*Apn, error) {
 	echan := make(chan error)
 
 	cert, err := tls.LoadX509KeyPair(cert_filename, key_filename)
