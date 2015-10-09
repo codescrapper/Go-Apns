@@ -29,12 +29,18 @@ type Apn struct {
 	conn    *tls.Conn
 	timeout time.Duration
 
-	sendChan  chan *sendArg
-	errorChan chan error
+	sendChan  	chan *sendArg
+	errorChan 	chan error
+	buffer 		int
 }
 
+var sent_queue []*sendArg
+var index_map map[uint32]int
+var old_index_map map[uint32]int
+var curr_idx int
+
 // New Apn with cert_filename and key_filename.
-func New(cert_filename, key_filename, server string, timeout time.Duration) (*Apn, error) {
+func New(cert_filename, key_filename, server string, timeout time.Duration, buffer int) (*Apn, error) {
 	echan := make(chan error)
 
 	cert, err := tls.LoadX509KeyPair(cert_filename, key_filename)
@@ -55,7 +61,13 @@ func New(cert_filename, key_filename, server string, timeout time.Duration) (*Ap
 		timeout:   timeout,
 		sendChan:  make(chan *sendArg),
 		errorChan: echan,
+		buffer:    buffer,
 	}
+
+	sent_queue = make([]*sendArg, 2*ret.buffer)
+	index_map = make(map[uint32]int)
+	old_index_map = make(map[uint32]int)
+	curr_idx = -1
 
 	go sendLoop(ret)
 	return ret, err
@@ -153,12 +165,24 @@ func sendLoop(apn *Apn) {
 
 		for connected := true; connected; {
 			select {
-			case <-quit:
+			case index := <-quit:
+				if index!=-1{
+					apn.clearBuffer(index)
+					for _, arg := range sent_queue[index+1:]{
+						apn.sendChan <- arg
+					}
+				}
 				connected = false
 			case <-time.After(apn.timeout):
 				connected = false
 			case arg := <-apn.sendChan:
 				arg.err <- apn.send(arg.n)
+				curr_idx = curr_idx+1
+				sent_queue[curr_idx] = arg
+				index_map[arg.n.Identifier] = curr_idx
+				if curr_idx >= 2*apn.buffer{
+					apn.clearBuffer(apn.buffer)
+				}
 			}
 		}
 
@@ -170,6 +194,13 @@ func sendLoop(apn *Apn) {
 	}
 }
 
+func (apn *Apn)clearBuffer(till int){
+	curr_idx = len(sent_queue)-till+1
+	sent_queue = append(sent_queue, sent_queue[till+1:]...)
+	old_index_map = index_map
+	index_map = make(map[uint32]int)
+}
+
 func readError(conn *tls.Conn, quit chan<- int, c chan<- error) {
 	p := make([]byte, 6, 6)
 	for {
@@ -177,7 +208,15 @@ func readError(conn *tls.Conn, quit chan<- int, c chan<- error) {
 		e := NewNotificationError(p[:n], err)
 		c <- e
 		if err != nil {
-			quit <- 1
+			index := -1
+			var ok bool
+			if e.OtherError==nil{
+				identifier := e.Identifier
+				if index, ok = index_map[identifier]; !ok{
+					index, _ = old_index_map[identifier]
+				}
+			}
+			quit <- index
 			return
 		}
 	}
