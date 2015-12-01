@@ -32,12 +32,11 @@ type Apn struct {
 	sendChan  	chan *sendArg
 	errorChan 	chan error
 	buffer 		int
+	sentChan 	chan *sendArg
 }
 
-var sent_queue []*sendArg
-var index_map map[uint32]int
-var old_index_map map[uint32]int
-var curr_idx int
+//Last value failed to retry in case of connection fail
+var last_fail uint32
 
 // New Apn with cert_filename and key_filename.
 func New(cert_filename string, key_filename string, server string, timeout time.Duration, buffer int) (*Apn, error) {
@@ -62,12 +61,8 @@ func New(cert_filename string, key_filename string, server string, timeout time.
 		sendChan:  make(chan *sendArg),
 		errorChan: echan,
 		buffer:    buffer,
+		sentChan:  make(chan *sendArg, buffer),
 	}
-
-	sent_queue = make([]*sendArg, 2*ret.buffer)
-	index_map = make(map[uint32]int)
-	old_index_map = make(map[uint32]int)
-	curr_idx = -1
 
 	go sendLoop(ret)
 	return ret, err
@@ -102,7 +97,7 @@ func (a *Apn) Close() error {
 	return conn.Close()
 }
 
-func (a *Apn) connect() (<-chan int, error) {
+func (a *Apn) connect() (<-chan uint32, error) {
 	// make sure last readError(...) will fail when reading.
 	err := a.Close()
 	if err != nil {
@@ -121,7 +116,7 @@ func (a *Apn) connect() (<-chan int, error) {
 	}
 
 	a.conn = client_conn
-	quit := make(chan int)
+	quit := make(chan uint32)
 	go readError(client_conn, quit, a.errorChan)
 
 	return quit, nil
@@ -162,30 +157,32 @@ func sendLoop(apn *Apn) {
 			continue
 		}
 		arg.err <- apn.send(arg.n)
+		apn.addToSent(arg)
 
 		for connected := true; connected; {
 			select {
-			case index := <-quit:
-				if index!=-1{
-					apn.clearBuffer(index)
-					for _, arg := range sent_queue[index+1:]{
-						apn.sendChan <- arg
-					}
-				}
+			case <-quit:
 				connected = false
+				go func(){
+					for{
+						elem := <-apn.sentChan
+						if elem.n.Identifier==last_fail{
+							break
+						}
+					}
+					for i := 0; i<len(apn.sentChan); i++ {
+				    	elem := <-apn.sentChan
+				    	
+				    	apn.Send(elem.n)
+				    }
+				}()
 			case <-time.After(apn.timeout):
 				connected = false
 			case arg := <-apn.sendChan:
 				arg.err <- apn.send(arg.n)
-				curr_idx = curr_idx+1
-				sent_queue[curr_idx] = arg
-				index_map[arg.n.Identifier] = curr_idx
-				if curr_idx >= 2*apn.buffer{
-					apn.clearBuffer(apn.buffer)
-				}
+				apn.addToSent(arg)
 			}
 		}
-
 		err = apn.Close()
 		if err != nil {
 			e := NewNotificationError(nil, err)
@@ -194,29 +191,26 @@ func sendLoop(apn *Apn) {
 	}
 }
 
-func (apn *Apn)clearBuffer(till int){
-	curr_idx = len(sent_queue)-till+1
-	sent_queue = append(sent_queue, sent_queue[till+1:]...)
-	old_index_map = index_map
-	index_map = make(map[uint32]int)
+func (a *Apn) addToSent(arg *sendArg){
+	if len(a.sentChan)>=a.buffer{
+		//fmt.Printf("Buffer reached: size=%d , buffer=%d\n", len(a.sentChan), a.buffer)
+		<-a.sentChan
+	}
+	a.sentChan <- arg
 }
 
-func readError(conn *tls.Conn, quit chan<- int, c chan<- error) {
+func readError(conn *tls.Conn, quit chan<- uint32, c chan<- error) {
 	p := make([]byte, 6, 6)
 	for {
 		n, err := conn.Read(p)
 		e := NewNotificationError(p[:n], err)
+		fmt.Errorf("Read error in APNS : "+ e.Error())
+		if e.OtherError==nil{
+			last_fail = e.Identifier
+		}
 		c <- e
 		if err != nil {
-			index := -1
-			var ok bool
-			if e.OtherError==nil{
-				identifier := e.Identifier
-				if index, ok = index_map[identifier]; !ok{
-					index, _ = old_index_map[identifier]
-				}
-			}
-			quit <- index
+			quit <- 1
 			return
 		}
 	}
