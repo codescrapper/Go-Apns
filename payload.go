@@ -19,6 +19,7 @@ type Aps struct {
 	Badge int    `json:"badge,omitempty"`
 	Sound string `json:"sound,omitempty"`
 	Category string `json:"category,omitempty"`
+	Urlargs []string `json:"url-args,omitempty"`
 }
 
 type Payload struct {
