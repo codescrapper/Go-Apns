@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -128,7 +127,7 @@ func (a *Apn) send(notification *Notification) error {
 		return fmt.Errorf("convert token to hex error: %s", err)
 	}
 
-	payloadbyte, _ := json.Marshal(notification.Payload)
+	payloadbyte, _ := notification.Payload.MarshalJSON()
 	expiry := time.Now().Add(time.Duration(notification.ExpireAfterSeconds) * time.Second).Unix()
 
 	buffer := bytes.NewBuffer([]byte{})
