@@ -20,6 +20,7 @@ type Aps struct {
 	Sound string `json:"sound,omitempty"`
 	Category string `json:"category,omitempty"`
 	Urlargs []string `json:"url-args,string,omitempty"`
+	Contentavailable int `json:"content-available,omitempty"`
 }
 
 type Payload struct {
