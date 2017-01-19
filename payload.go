@@ -21,6 +21,7 @@ type Aps struct {
 	Category string `json:"category,omitempty"`
 	Urlargs []string `json:"url-args,string,omitempty"`
 	Contentavailable int `json:"content-available,omitempty"`
+	Mutablecontent int `json:"mutable-content,omitempty"`
 }
 
 type Payload struct {
